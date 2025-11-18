@@ -1,68 +1,69 @@
 const knexLib = require('knex');
 
 const dbConfig = {
-  host: '127.0.0.1',
-  user: 'root',
-  password: '',
-  database: 'dormhive',
+  host: process.env.DB_HOST || '127.0.0.1',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASS || '',
+  database: process.env.DB_NAME || 'dormhive',
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 3306,
 };
 
 const knexConfig = {
   client: 'mysql2',
-  connection: dbConfig,
+  connection: {
+    host: dbConfig.host,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    database: dbConfig.database,
+    port: dbConfig.port,
+  },
   pool: { min: 0, max: 10 },
+  acquireConnectionTimeout: 10000,
 };
 
 const db = knexLib(knexConfig);
 
 async function setupDatabase() {
-  let tempKnex;
+  let tmpKnex;
   try {
-    // Connect without selecting a database to create it if missing
-    tempKnex = knexLib({
+    // ensure database exists (connect without specifying DB)
+    tmpKnex = knexLib({
       client: 'mysql2',
-      connection: {
-        host: dbConfig.host,
-        user: dbConfig.user,
-        password: dbConfig.password,
-      },
+      connection: { host: dbConfig.host, user: dbConfig.user, password: dbConfig.password },
     });
-
-    await tempKnex.raw('CREATE DATABASE IF NOT EXISTS ?? CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci', [dbConfig.database]);
+    await tmpKnex.raw(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\``);
   } catch (err) {
-    console.error('Error creating database:', err);
+    console.error('Error ensuring database exists:', err);
     throw err;
   } finally {
-    if (tempKnex) {
-      try { await tempKnex.destroy(); } catch (_) {}
-    }
+    if (tmpKnex) await tmpKnex.destroy();
   }
 
   try {
-    // Create tables if they don't exist
-    const existsUsers = await db.schema.hasTable('users');
-    if (!existsUsers) {
+    // users table
+    const hasUsers = await db.schema.hasTable('users');
+    if (!hasUsers) {
       await db.schema.createTable('users', (t) => {
         t.increments('id').primary();
-        t.string('email').notNullable().unique();
-        t.string('password').notNullable();
         t.string('firstName').notNullable();
         t.string('lastName').notNullable();
+        t.string('email').notNullable().unique();
+        t.string('passwordHash').notNullable();
+        t.string('role').notNullable().defaultTo('tenant'); // 'owner' or 'tenant' or 'admin'
         t.string('phone').nullable();
-        t.enum('role', ['tenant', 'owner']).notNullable().defaultTo('tenant');
-        t.boolean('isVerified').notNullable().defaultTo(true);
         t.timestamp('created_at').defaultTo(db.fn.now());
       });
       console.log('Created table: users');
     }
 
-    const existsProperties = await db.schema.hasTable('properties');
-    if (!existsProperties) {
+    // properties table
+    const hasProperties = await db.schema.hasTable('properties');
+    if (!hasProperties) {
       await db.schema.createTable('properties', (t) => {
         t.increments('id').primary();
         t.integer('ownerId').unsigned().notNullable();
         t.string('propertyName').notNullable();
-        t.string('address').notNullable();
+        t.text('address').notNullable();
         t.text('description').nullable();
         t.timestamp('created_at').defaultTo(db.fn.now());
         t.foreign('ownerId').references('id').inTable('users').onDelete('CASCADE');
@@ -70,40 +71,85 @@ async function setupDatabase() {
       console.log('Created table: properties');
     }
 
-    const existsRooms = await db.schema.hasTable('rooms');
-    if (!existsRooms) {
+    // rooms table (paymentSchedule uses short values '1st'|'15th')
+    const hasRooms = await db.schema.hasTable('rooms');
+    if (!hasRooms) {
       await db.schema.createTable('rooms', (t) => {
         t.increments('id').primary();
         t.integer('propertyId').unsigned().notNullable();
         t.string('roomNumber').notNullable();
-        t.string('type').notNullable();
-        t.decimal('monthlyRent', 10, 2).notNullable();
-        t.integer('capacity').nullable();
+        t.string('type').nullable();
+        t.decimal('monthlyRent', 10, 2).defaultTo(0);
+        t.integer('capacity').defaultTo(1);
         t.text('amenities').nullable();
+        t.enum('paymentSchedule', ['1st', '15th']).notNullable().defaultTo('1st');
         t.timestamp('created_at').defaultTo(db.fn.now());
         t.foreign('propertyId').references('id').inTable('properties').onDelete('CASCADE');
       });
-      console.log('Created table: rooms');
+      console.log('Created table: rooms (with paymentSchedule)');
+    } else {
+      const hasPaymentSchedule = await db.schema.hasColumn('rooms', 'paymentSchedule');
+      if (!hasPaymentSchedule) {
+        await db.schema.table('rooms', (t) => {
+          t.enum('paymentSchedule', ['1st', '15th']).notNullable().defaultTo('1st');
+        });
+        console.log('Added paymentSchedule column to rooms');
+      } else {
+        // migrate long-form values back to short shorthand if present
+        try {
+          await db('rooms').where({ paymentSchedule: 'every 1st day of every month' }).update({ paymentSchedule: '1st' });
+          await db('rooms').where({ paymentSchedule: 'every 15th day of every month' }).update({ paymentSchedule: '15th' });
+        } catch (_) {}
+      }
     }
 
-    // Create room_tenants table (new)
-    const existsRoomTenants = await db.schema.hasTable('room_tenants');
-    if (!existsRoomTenants) {
+    // room_tenants table
+    const hasRoomTenants = await db.schema.hasTable('room_tenants');
+    if (!hasRoomTenants) {
       await db.schema.createTable('room_tenants', (t) => {
         t.increments('id').primary();
         t.integer('roomId').unsigned().notNullable();
         t.integer('tenantId').unsigned().notNullable();
+        t.enum('paymentSchedule', ['1st', '15th']).notNullable().defaultTo('1st');
         t.timestamp('created_at').defaultTo(db.fn.now());
         t.foreign('roomId').references('id').inTable('rooms').onDelete('CASCADE');
         t.foreign('tenantId').references('id').inTable('users').onDelete('CASCADE');
-        t.unique(['roomId', 'tenantId']); // prevent duplicate assignments
+        t.unique(['roomId', 'tenantId']);
       });
-      console.log('Created table: room_tenants');
+      console.log('Created table: room_tenants (with paymentSchedule)');
+    } else {
+      const hasRTPaymentSchedule = await db.schema.hasColumn('room_tenants', 'paymentSchedule');
+      if (!hasRTPaymentSchedule) {
+        await db.schema.table('room_tenants', (t) => {
+          t.enum('paymentSchedule', ['1st', '15th']).notNullable().defaultTo('1st');
+        });
+        console.log('Added paymentSchedule column to room_tenants');
+      } else {
+        try {
+          await db('room_tenants').where({ paymentSchedule: 'every 1st day of every month' }).update({ paymentSchedule: '1st' });
+          await db('room_tenants').where({ paymentSchedule: 'every 15th day of every month' }).update({ paymentSchedule: '15th' });
+        } catch (_) {}
+      }
     }
 
-  } catch (error) {
-    console.error('Error setting up tables:', error);
-    throw error;
+    // optional bills table
+    const hasBills = await db.schema.hasTable('bills');
+    if (!hasBills) {
+      await db.schema.createTable('bills', (t) => {
+        t.increments('id').primary();
+        t.integer('tenantId').unsigned().notNullable();
+        t.decimal('amount', 10, 2).notNullable().defaultTo(0);
+        t.string('type').notNullable(); // 'rent'|'utility' etc.
+        t.string('status').notNullable().defaultTo('unpaid'); // 'unpaid'|'paid'
+        t.timestamp('due_date').nullable();
+        t.timestamp('created_at').defaultTo(db.fn.now());
+        t.foreign('tenantId').references('id').inTable('users').onDelete('CASCADE');
+      });
+      console.log('Created table: bills (optional)');
+    }
+  } catch (err) {
+    console.error('Database setup error:', err);
+    throw err;
   }
 }
 
