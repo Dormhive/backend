@@ -143,9 +143,20 @@ async function setupDatabase() {
         t.string('status').notNullable().defaultTo('unpaid'); // 'unpaid'|'paid'
         t.timestamp('due_date').nullable();
         t.timestamp('created_at').defaultTo(db.fn.now());
+        // verification column tracks owner/admin verification of uploaded receipts
+        t.enum('verification', ['pending', 'verified', 'rejected']).notNullable().defaultTo('pending');
         t.foreign('tenantId').references('id').inTable('users').onDelete('CASCADE');
       });
-      console.log('Created table: bills (optional)');
+      console.log('Created table: bills (optional) with verification column');
+    } else {
+      // If bills table already exists, ensure verification column is present
+      const hasVerification = await db.schema.hasColumn('bills', 'verification');
+      if (!hasVerification) {
+        await db.schema.table('bills', (t) => {
+          t.enum('verification', ['pending', 'verified', 'rejected']).notNullable().defaultTo('pending');
+        });
+        console.log('Added verification column to bills');
+      }
     }
   } catch (err) {
     console.error('Database setup error:', err);
