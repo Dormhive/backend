@@ -7,7 +7,7 @@ const { setupDatabase } = require('./database');
 const authRoutes = require('./pages/auth/auth');
 const dashboardRoutes = require('./pages/dashboard/dashboard');
 const propertiesRoutes = require('./pages/properties/properties');
-const billsRouter = require('./routes/bills');
+//const billsRouter = require('./routes/bills');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -27,7 +27,7 @@ app.get('/', (req, res) => res.send('Welcome to the DormHive API!'));
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/properties', propertiesRoutes);
-app.use('/api/bills', billsRouter);
+//app.use('/api/bills', billsRouter);
 
 async function startServer() {
   try {
