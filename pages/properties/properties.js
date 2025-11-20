@@ -50,6 +50,44 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
+// PUT /api/properties/:propertyId -> update property (owner)
+router.put('/:propertyId', authenticateToken, async (req, res) => {
+  const { propertyId } = req.params;
+  const { propertyName, address, description } = req.body;
+  try {
+    const prop = await knex('properties').where({ id: propertyId, ownerId: req.user.id }).first();
+    if (!prop) return res.status(404).json({ message: 'Property not found or unauthorized' });
+
+    await knex('properties').where({ id: propertyId }).update({
+      propertyName: propertyName || prop.propertyName,
+      address: address || prop.address,
+      description: description !== undefined ? description : prop.description,
+    });
+
+    const updated = await knex('properties').where({ id: propertyId }).first();
+    res.json(updated);
+  } catch (err) {
+    console.error('Error updating property:', err);
+    res.status(500).json({ message: 'Error updating property' });
+  }
+});
+
+// DELETE /api/properties/:propertyId -> delete property (owner)
+router.delete('/:propertyId', authenticateToken, async (req, res) => {
+  const { propertyId } = req.params;
+  try {
+    const prop = await knex('properties').where({ id: propertyId, ownerId: req.user.id }).first();
+    if (!prop) return res.status(404).json({ message: 'Property not found or unauthorized' });
+
+    await knex('properties').where({ id: propertyId }).delete();
+    // cascade constraints in DB should remove rooms / room_tenants
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting property:', err);
+    res.status(500).json({ message: 'Error deleting property' });
+  }
+});
+
 // GET /api/properties/tenants/me/room -> MUST BE BEFORE /:propertyId routes
 router.get('/tenants/me/room', authenticateToken, async (req, res) => {
   try {
@@ -187,7 +225,94 @@ router.post('/:propertyId/rooms', authenticateToken, async (req, res) => {
   }
 });
 
-// ...existing code...
+// PUT /api/properties/:propertyId/rooms/:roomId -> update room (owner only)
+router.put('/:propertyId/rooms/:roomId', authenticateToken, async (req, res) => {
+  const { propertyId, roomId } = req.params;
+  const { roomNumber, type, monthlyRent, capacity, amenities, paymentSchedule } = req.body;
+
+  try {
+    // verify room belongs to property and owner
+    const room = await knex('rooms')
+      .join('properties', 'rooms.propertyId', 'properties.id')
+      .where({ 'rooms.id': roomId, 'properties.ownerId': req.user.id })
+      .select('rooms.*')
+      .first();
+
+    if (!room) return res.status(404).json({ message: 'Room not found or unauthorized' });
+
+    const schedule = paymentSchedule === '15th' ? '15th' : '1st';
+
+    await knex('rooms').where({ id: roomId }).update({
+      roomNumber: roomNumber || room.roomNumber,
+      type: type || room.type,
+      monthlyRent: monthlyRent !== undefined ? monthlyRent : room.monthlyRent,
+      capacity: capacity !== undefined ? capacity : room.capacity,
+      amenities: amenities !== undefined ? amenities : room.amenities,
+      paymentSchedule: schedule || room.paymentSchedule,
+    });
+
+    const updatedRoom = await knex('rooms').where({ id: roomId }).first();
+    // include tenants
+    const tenants = await knex('room_tenants')
+      .join('users', 'room_tenants.tenantId', 'users.id')
+      .where({ roomId })
+      .select(
+        'users.id',
+        'users.firstName',
+        'users.lastName',
+        'users.email',
+        'users.phone',
+        'room_tenants.paymentSchedule'
+      );
+
+    res.json({ ...updatedRoom, tenants });
+  } catch (err) {
+    console.error('Error updating room:', err);
+    res.status(500).json({ message: 'Error updating room' });
+  }
+});
+
+// DELETE /api/properties/:propertyId/rooms/:roomId -> delete room (owner only)
+router.delete('/:propertyId/rooms/:roomId', authenticateToken, async (req, res) => {
+  const { propertyId, roomId } = req.params;
+
+  try {
+    // verify room belongs to owner
+    const room = await knex('rooms')
+      .join('properties', 'rooms.propertyId', 'properties.id')
+      .where({ 'rooms.id': roomId, 'properties.ownerId': req.user.id })
+      .first();
+
+    if (!room) {
+      return res.status(404).json({ message: 'Room not found or unauthorized' });
+    }
+
+    await knex('rooms').where({ id: roomId }).delete();
+    // return remaining rooms for the property
+    const roomList = await knex('rooms').where({ propertyId }).orderBy('id', 'asc');
+    const roomsWithTenants = await Promise.all(
+      roomList.map(async (r) => {
+        const tenants = await knex('room_tenants')
+          .join('users', 'room_tenants.tenantId', 'users.id')
+          .where({ roomId: r.id })
+          .select(
+            'users.id',
+            'users.firstName',
+            'users.lastName',
+            'users.email',
+            'users.phone',
+            'room_tenants.paymentSchedule'
+          );
+        return { ...r, tenants };
+      })
+    );
+    res.json(roomsWithTenants);
+  } catch (err) {
+    console.error('Error deleting room:', err);
+    res.status(500).json({ message: 'Error deleting room' });
+  }
+});
+
 // POST /api/properties/:propertyId/rooms/:roomId/assign-tenant -> assign tenant to room
 router.post('/:propertyId/rooms/:roomId/assign-tenant', authenticateToken, async (req, res) => {
   const { propertyId, roomId } = req.params;
