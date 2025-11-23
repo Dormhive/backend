@@ -131,6 +131,24 @@ async function setupDatabase() {
       }
     }
 
+    // concers table
+    const hasConcerns = await db.schema.hasTable('concerns');
+    if (!hasConcerns) {
+      await db.schema.createTable('concerns', (t) => {
+        t.increments('id').primary();
+        t.integer('tenantid').unsigned().notNullable();
+        t.integer('ownerid').unsigned().notNullable();
+        t.string('sender').notNullable().defaultTo('Tenant');
+        t.timestamp('created_at').defaultTo(db.fn.now());
+        t.integer('roomid').unsigned().nullable();
+        t.integer('propertyid').unsigned().nullable();
+        t.string('category').notNullable();
+        t.text('message').notNullable();
+        t.string('status').notNullable().defaultTo('Open');
+      });
+      console.log('Created table: concerns');
+    }
+
     // bills table
     const hasBills = await db.schema.hasTable('bills');
     if (!hasBills) {

@@ -8,6 +8,7 @@ const authRoutes = require('./pages/auth/auth');
 const dashboardRoutes = require('./pages/dashboard/dashboard');
 const propertiesRoutes = require('./pages/properties/properties');
 const billsRouter = require('./pages/routes/bills');
+const concernsRouter = require('./pages/routes/concerns');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -28,7 +29,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/properties', propertiesRoutes);
 app.use('/api/bills', billsRouter);
-
+app.use('/api/concerns', concernsRouter);
 async function startServer() {
   try {
     await setupDatabase(); // will add verification column if missing
