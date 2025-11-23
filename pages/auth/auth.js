@@ -1,10 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
+const fs = require('fs');
 const { knex } = require('../../database');
 
 const router = express.Router();
-const JWT_SECRET = 'your-secret-key-change-this'; // Change this to a strong secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this'; // Use env variable for consistency
 
 // 7. Signup
 router.post('/signup', async (req, res) => {
@@ -40,6 +42,7 @@ router.post('/signup', async (req, res) => {
       lastName,
       phone,
       role,
+      isVerified: true // Default to true for prototype
     });
 
     res.status(201).json({ message: 'User registered successfully!' });
@@ -74,6 +77,15 @@ router.post('/login', async (req, res) => {
         // Check if verified (defaulted to true for prototype)
         if (!user.isVerified) {
             return res.status(401).json({ message: 'Please verify your account (check OTP).' });
+        }
+
+        // Create uploads/tenant{id} folder if user is a tenant
+        if (user.role === 'tenant') {
+            const folderPath = path.join(__dirname, '..', '..', 'uploads', `tenant${user.id}`);
+            if (!fs.existsSync(folderPath)) {
+                fs.mkdirSync(folderPath, { recursive: true });
+                console.log(`Created folder: ${folderPath}`);
+            }
         }
 
         // Create JWT Token

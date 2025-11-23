@@ -7,71 +7,72 @@ const { knex } = require('../../database');
 
 const router = express.Router();
 
-// ensure uploads directory exists (backend/uploads/receipts)
-const receiptsDir = path.join(__dirname, '..', '..', 'uploads', 'receipts');
-fs.mkdirSync(receiptsDir, { recursive: true });
+// Helper to extract userId from JWT payload
+function extractUserId(payload) {
+  return (
+    payload?.id ||
+    payload?.userId ||
+    payload?.user_id ||
+    payload?.sub ||
+    null
+  );
+}
 
-// multer config — store files in backend/uploads/receipts
+// Middleware to extract tenantId from JWT before multer runs
+function jwtTenantIdMiddleware(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  console.log('Authorization header:', req.headers.authorization); // Log the full header
+  console.log('Extracted token:', token); // Log the token string
+  if (!token) {
+    req.tenantId = null;
+    return next();
+  }
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this');
+    req.tenantId = extractUserId(payload);
+    console.log('JWT payload:', payload);
+    console.log('Extracted tenantId:', req.tenantId);
+  } catch (err) {
+    req.tenantId = null;
+    console.log('JWT verification failed:', err.message);
+  }
+  next();
+}
+
+// Multer storage: dynamic destination and filename
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, receiptsDir),
-  filename: (req, file, cb) => {
+  destination: function (req, file, cb) {
+    const userId = req.tenantId;
+    const folderName = userId ? `tenant${userId}` : 'tenant_unknown';
+    const billType = req.body.type || 'unknown';
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
+    const uploadDir = path.join(__dirname, '..', '..', 'uploads', folderName, String(billType), dateStr);
+    fs.mkdirSync(uploadDir, { recursive: true });
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
     const ext = path.extname(file.originalname) || '';
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-    cb(null, name);
+    cb(null, `${dateStr}${ext}`);
   },
 });
 const upload = multer({ storage });
 
-/**
- * GET /api/bills
- * Returns bills for the authenticated tenant
- */
-router.get('/', async (req, res) => {
+router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, res) => {
   try {
-    const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ message: 'Missing token' });
-
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-    } catch (err) {
-      return res.status(401).json({ message: 'Invalid token' });
+    if (!req.tenantId) {
+      console.log('Tenant ID missing or invalid after JWT extraction');
+      return res.status(401).json({ message: 'Invalid or missing token' });
     }
-    const tenantId = payload.id || payload.userId || payload.sub;
-    if (!tenantId) return res.status(401).json({ message: 'Invalid token payload' });
-
-    const bills = await knex('bills').where({ tenantId }).orderBy('created_at', 'desc');
-    return res.json({ bills });
-  } catch (err) {
-    console.error('GET /api/bills error:', err);
-    return res.status(500).json({ message: 'Failed to fetch bills' });
-  }
-});
-
-/**
- * POST /api/bills
- * Accepts multipart/form-data:
- * - amount (optional)
- * - type ('rent'|'utility')
- * - receipt (file, optional)
- *
- * Creates a bills record with verification = 'pending'
- */
-router.post('/', upload.single('receipt'), async (req, res) => {
-  try {
-    const auth = req.headers.authorization || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    if (!token) return res.status(401).json({ message: 'Missing token' });
-
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-    } catch (err) {
-      return res.status(401).json({ message: 'Invalid token' });
-    }
-    const tenantId = payload.id || payload.userId || payload.sub;
-    if (!tenantId) return res.status(401).json({ message: 'Invalid token payload' });
 
     const { amount, type } = req.body;
     const amountNum = amount ? Number(amount) : 0;
@@ -79,26 +80,27 @@ router.post('/', upload.single('receipt'), async (req, res) => {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 
-    const receiptFile = req.file ? req.file.filename : null;
+    let receiptPath = null;
+    if (req.file) {
+      receiptPath = path.relative(path.join(__dirname, '..', '..', 'uploads'), req.file.path);
+    }
 
     const insertPayload = {
-      tenantId: tenantId,
+      tenantId: req.tenantId,
       amount: amountNum || 0,
       type: type || 'rent',
       status: 'unpaid',
-      // verification defaults to 'pending' per your DB migration; set explicitly to be safe
       verification: 'pending',
       created_at: new Date(),
+      receipt: receiptPath,
     };
-
-    // If you added a 'receipt' column to bills table, uncomment:
-    // insertPayload.receipt = receiptFile;
 
     const [insertId] = await knex('bills').insert(insertPayload);
 
     return res.status(201).json({
       message: 'Payment submitted. Verification status set to pending.',
       billId: insertId,
+      receiptPath,
     });
   } catch (err) {
     console.error('POST /api/bills error:', err);

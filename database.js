@@ -49,7 +49,7 @@ async function setupDatabase() {
         t.string('lastName').notNullable();
         t.string('email').notNullable().unique();
         t.string('passwordHash').notNullable();
-        t.string('role').notNullable().defaultTo('tenant'); // 'owner' or 'tenant' or 'admin'
+        t.string('role').notNullable().defaultTo('tenant');
         t.string('phone').nullable();
         t.timestamp('created_at').defaultTo(db.fn.now());
       });
@@ -71,7 +71,7 @@ async function setupDatabase() {
       console.log('Created table: properties');
     }
 
-    // rooms table (paymentSchedule uses short values '1st'|'15th')
+    // rooms table
     const hasRooms = await db.schema.hasTable('rooms');
     if (!hasRooms) {
       await db.schema.createTable('rooms', (t) => {
@@ -95,7 +95,6 @@ async function setupDatabase() {
         });
         console.log('Added paymentSchedule column to rooms');
       } else {
-        // migrate long-form values back to short shorthand if present
         try {
           await db('rooms').where({ paymentSchedule: 'every 1st day of every month' }).update({ paymentSchedule: '1st' });
           await db('rooms').where({ paymentSchedule: 'every 15th day of every month' }).update({ paymentSchedule: '15th' });
@@ -132,34 +131,33 @@ async function setupDatabase() {
       }
     }
 
-    // optional bills table
+    // bills table
     const hasBills = await db.schema.hasTable('bills');
     if (!hasBills) {
       await db.schema.createTable('bills', (t) => {
         t.increments('id').primary();
         t.integer('tenantId').unsigned().notNullable();
         t.decimal('amount', 10, 2).notNullable().defaultTo(0);
-        t.string('type').notNullable(); // 'rent'|'utility' etc.
-        t.string('status').notNullable().defaultTo('unpaid'); // 'unpaid'|'paid'
+        t.string('type').notNullable();
+        t.string('status').notNullable().defaultTo('unpaid');
         t.timestamp('due_date').nullable();
         t.timestamp('created_at').defaultTo(db.fn.now());
-        // verification column tracks owner/admin verification of uploaded receipts
         t.enum('verification', ['pending', 'verified', 'rejected']).notNullable().defaultTo('pending');
+        t.string('receipt').nullable(); // <-- Add this line
         t.foreign('tenantId').references('id').inTable('users').onDelete('CASCADE');
       });
-      console.log('Created table: bills (optional) with verification column');
+      console.log('Created table: bills with receipt column');
     } else {
-      // If bills table already exists, ensure verification column is present
-      const hasVerification = await db.schema.hasColumn('bills', 'verification');
-      if (!hasVerification) {
+      const hasReceipt = await db.schema.hasColumn('bills', 'receipt');
+      if (!hasReceipt) {
         await db.schema.table('bills', (t) => {
-          t.enum('verification', ['pending', 'verified', 'rejected']).notNullable().defaultTo('pending');
+          t.string('receipt').nullable();
         });
-        console.log('Added verification column to bills');
+        console.log('Added receipt column to bills');
       }
     }
   } catch (err) {
-    console.error('Database setup error:', err);
+    console.error('Error setting up tables:', err);
     throw err;
   }
 }
