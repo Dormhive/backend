@@ -22,8 +22,6 @@ function extractUserId(payload) {
 function jwtTenantIdMiddleware(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  console.log('Authorization header:', req.headers.authorization); // Log the full header
-  console.log('Extracted token:', token); // Log the token string
   if (!token) {
     req.tenantId = null;
     return next();
@@ -31,11 +29,8 @@ function jwtTenantIdMiddleware(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this');
     req.tenantId = extractUserId(payload);
-    console.log('JWT payload:', payload);
-    console.log('Extracted tenantId:', req.tenantId);
   } catch (err) {
     req.tenantId = null;
-    console.log('JWT verification failed:', err.message);
   }
   next();
 }
@@ -46,12 +41,7 @@ const storage = multer.diskStorage({
     const userId = req.tenantId;
     const folderName = userId ? `tenant${userId}` : 'tenant_unknown';
     const billType = req.body.type || 'unknown';
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${yyyy}${mm}${dd}`;
-    const uploadDir = path.join(__dirname, '..', '..', 'uploads', folderName, String(billType), dateStr);
+    const uploadDir = path.join(__dirname, '..', '..', 'uploads', folderName, String(billType));
     fs.mkdirSync(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
@@ -60,9 +50,12 @@ const storage = multer.diskStorage({
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${yyyy}${mm}${dd}`;
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const datetimeStr = `${yyyy}${mm}${dd}_${hh}${min}${ss}`;
     const ext = path.extname(file.originalname) || '';
-    cb(null, `${dateStr}${ext}`);
+    cb(null, `${datetimeStr}${ext}`);
   },
 });
 const upload = multer({ storage });
@@ -70,7 +63,6 @@ const upload = multer({ storage });
 router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, res) => {
   try {
     if (!req.tenantId) {
-      console.log('Tenant ID missing or invalid after JWT extraction');
       return res.status(401).json({ message: 'Invalid or missing token' });
     }
 
@@ -105,6 +97,20 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
   } catch (err) {
     console.error('POST /api/bills error:', err);
     return res.status(500).json({ message: 'Failed to submit payment' });
+  }
+});
+
+// GET endpoint for payment history
+router.get('/', jwtTenantIdMiddleware, async (req, res) => {
+  try {
+    if (!req.tenantId) {
+      return res.status(401).json({ message: 'Invalid or missing token' });
+    }
+    const bills = await knex('bills').where({ tenantId: req.tenantId }).orderBy('created_at', 'desc');
+    return res.json({ bills });
+  } catch (err) {
+    console.error('GET /api/bills error:', err);
+    return res.status(500).json({ message: 'Failed to fetch payment history' });
   }
 });
 
