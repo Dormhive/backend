@@ -60,13 +60,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// POST endpoint to submit a payment
 router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, res) => {
   try {
     if (!req.tenantId) {
       return res.status(401).json({ message: 'Invalid or missing token' });
     }
 
-    const { amount, type } = req.body;
+    const { amount, type, year, month } = req.body;
     const amountNum = amount ? Number(amount) : 0;
     if (amount && (isNaN(amountNum) || amountNum < 0)) {
       return res.status(400).json({ message: 'Invalid amount' });
@@ -77,6 +78,7 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
       receiptPath = path.relative(path.join(__dirname, '..', '..', 'uploads'), req.file.path);
     }
 
+    // Insert into bills (now includes year and month)
     const insertPayload = {
       tenantId: req.tenantId,
       amount: amountNum || 0,
@@ -85,9 +87,21 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
       verification: 'pending',
       created_at: new Date(),
       receipt: receiptPath,
+      year: year ? Number(year) : null,
+      month: month ? Number(month) : null,
     };
 
     const [insertId] = await knex('bills').insert(insertPayload);
+
+    // Update bills_rent using tenantid, year, and month
+    if (year && month) {
+      await knex('bills_rent')
+        .where({ tenantid: req.tenantId, year: Number(year), month: Number(month) })
+        .update({
+          status: 'Pending',
+          receipt: receiptPath,
+        });
+    }
 
     return res.status(201).json({
       message: 'Payment submitted. Verification status set to pending.',
@@ -100,6 +114,7 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
   }
 });
 
+
 // GET endpoint for payment history
 router.get('/', jwtTenantIdMiddleware, async (req, res) => {
   try {
@@ -111,6 +126,28 @@ router.get('/', jwtTenantIdMiddleware, async (req, res) => {
   } catch (err) {
     console.error('GET /api/bills error:', err);
     return res.status(500).json({ message: 'Failed to fetch payment history' });
+  }
+});
+
+router.get('/rent', jwtTenantIdMiddleware, async (req, res) => {
+  try {
+    if (!req.tenantId) {
+      return res.status(401).json({ message: 'Invalid or missing token' });
+    }
+    // Join bills_rent with rooms to get monthlyRent as amount_due
+    const bills = await knex('bills_rent')
+      .join('rooms', 'bills_rent.roomid', 'rooms.id')
+      .select(
+        'bills_rent.*',
+        'rooms.monthlyRent as amount_due'
+      )
+      .where('bills_rent.tenantid', req.tenantId)
+      .andWhere('bills_rent.status', '!=', 'Paid')
+      .orderBy('bills_rent.due_date', 'asc');
+    return res.json({ bills });
+  } catch (err) {
+    console.error('GET /api/bills/rent error:', err);
+    return res.status(500).json({ message: 'Failed to fetch unpaid rent bills' });
   }
 });
 
