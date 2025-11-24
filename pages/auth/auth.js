@@ -6,57 +6,116 @@ const fs = require('fs');
 const { knex } = require('../../database');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this'; // Use env variable for consistency
+const JWT_SECRET = 'your-secret-key-change-this';
 
-// 7. Signup
+// Signup route
 router.post('/signup', async (req, res) => {
-  const {
-    email,
-    password,
-    firstName,
-    lastName,
-    phone,
-    role, // 'tenant' or 'owner'
-  } = req.body;
-
-  if (!email || !password || !firstName || !lastName || !phone || !role) {
-    return res.status(400).json({ message: 'Please fill all required fields.' });
+  const { firstName, lastName, email, phone, password, role } = req.body;
+  if (!firstName || !lastName || !email || !phone || !password || !role) {
+    return res.status(400).json({ message: 'All fields are required.' });
   }
-
   try {
-    // Check if user already exists
-    const existingUser = await knex('users').where({ email }).first();
-    if (existingUser) {
-      return res.status(409).json({ message: 'User already exists with this email.' });
+    // Check for existing user
+    const existing = await knex('users').where({ email }).first();
+    if (existing) {
+      return res.status(400).json({ message: 'Email already exists.' });
     }
-
-    // Hash the password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Create new user (remove isVerified if not in schema)
+    // Hash password
+    const hashed = await bcrypt.hash(password, 10);
+    // Insert user
     await knex('users').insert({
-      email,
-      password: hashedPassword,
       firstName,
       lastName,
+      email,
       phone,
-      role
+      password: hashed,
+      role,
     });
-
-    res.status(201).json({ message: 'User registered successfully!' });
-
-  } catch (error) {
-    console.error(error);
-    // Handle duplicate email error from DB (just in case)
-    if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ message: 'User already exists with this email.' });
-    }
-    res.status(500).json({ message: 'Server error during registration.' });
+    res.json({ message: 'Signup successful! You can now log in.' });
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({ message: 'Server error during signup.' });
   }
 });
 
-// 8. Login
+// Helper: Ensure one bill per tenant per month from move_in to current month
+async function generateBillsForCurrentMonth() {
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth() + 1;
+
+  // Get all tenants
+  const roomTenants = await knex('room_tenants');
+  for (const rt of roomTenants) {
+    const moveInDate = new Date(rt.move_in);
+    let year = moveInDate.getFullYear();
+    let month = moveInDate.getMonth() + 1;
+
+    // Get room and property info
+    const room = await knex('rooms').where({ id: rt.roomId }).first();
+    if (!room) continue;
+    const propertyid = room.propertyId;
+    const ownerRow = await knex('properties').where({ id: propertyid }).first();
+    const ownerid = ownerRow ? ownerRow.ownerId : null;
+
+    // Loop from move_in to current month (inclusive)
+    while (year < currentYear || (year === currentYear && month <= currentMonth)) {
+      // Only create record if move_in is before or equal to this month/year
+      const billMonthDate = new Date(year, month - 1, 1);
+      if (moveInDate > billMonthDate) {
+        // Advance to next month
+        if (month === 12) {
+          month = 1;
+          year += 1;
+        } else {
+          month += 1;
+        }
+        continue;
+      }
+
+      // Check if bill already exists for this tenant/month/year
+      const exists = await knex('bills_rent')
+        .where({
+          tenantid: rt.tenantId,
+          roomid: rt.roomId,
+          month,
+          year,
+        })
+        .first();
+
+      if (!exists) {
+        // Calculate due_date for this month/year
+        const lastDayOfMonth = new Date(year, month, 0).getDate();
+        let day = rt.paymentfrequency;
+        if (!day || day < 1) day = 1;
+        if (day > lastDayOfMonth) day = lastDayOfMonth;
+        const due_date = new Date(year, month - 1, day);
+
+        await knex('bills_rent').insert({
+          ownerid,
+          tenantid: rt.tenantId,
+          roomid: rt.roomId,
+          propertyid,
+          paymentfrequency: rt.paymentfrequency,
+          move_in: rt.move_in,
+          month,
+          year,
+          due_date,
+        });
+      }
+
+      // Advance to next month
+      if (month === 12) {
+        month = 1;
+        year += 1;
+      } else {
+        month += 1;
+      }
+    }
+  }
+}
+
+// Login route
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
