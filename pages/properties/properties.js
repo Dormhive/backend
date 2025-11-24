@@ -425,6 +425,9 @@ router.put('/:propertyId/rooms/:roomId/tenants/:tenantId', authenticateToken, as
   }
 
   // Tenant pays a bill (uploads receipt, sets status to Pending)
+});
+
+// PATCH /api/bills_rent/:billId/pay (Tenant uploads payment proof)
 router.patch('/bills_rent/:billId/pay', authenticateToken, async (req, res) => {
   const { billId } = req.params;
   const { receipt } = req.body;
@@ -443,7 +446,7 @@ router.patch('/bills_rent/:billId/pay', authenticateToken, async (req, res) => {
   }
 });
 
-// Owner verifies or rejects payment
+// PATCH /api/bills_rent/:billId/verify (Owner verifies or rejects)
 router.patch('/bills_rent/:billId/verify', authenticateToken, async (req, res) => {
   const { billId } = req.params;
   const { action } = req.body; // 'Verified' or 'Rejected'
@@ -467,9 +470,11 @@ router.patch('/bills_rent/:billId/verify', authenticateToken, async (req, res) =
   }
 });
 
+// GET /api/bills_rent?status=Pending (Owner fetches pending bills)
 router.get('/bills_rent', authenticateToken, async (req, res) => {
   const { status } = req.query;
   try {
+    console.log('Fetching bills for ownerId:', req.user.id, 'with status:', status);
     const bills = await knex('bills_rent')
       .join('properties', 'bills_rent.propertyid', 'properties.id')
       .join('users', 'bills_rent.tenantid', 'users.id')
@@ -481,17 +486,16 @@ router.get('/bills_rent', authenticateToken, async (req, res) => {
         'bills_rent.*',
         'users.email as tenant_email'
       );
-    // Add category field (for now, always 'Rent')
+    console.log('Bills found:', bills.length);
     const billsWithCategory = bills.map(bill => ({
       ...bill,
       category: 'Rent'
     }));
     res.json(billsWithCategory);
   } catch (err) {
+    console.error('Error fetching bills:', err);
     res.status(500).json({ message: 'Error fetching bills' });
   }
 });
-});
-
 
 module.exports = router;
