@@ -423,6 +423,75 @@ router.put('/:propertyId/rooms/:roomId/tenants/:tenantId', authenticateToken, as
     console.error('Error updating tenant move_in/paymentfrequency:', err);
     res.status(500).json({ message: 'Error updating tenant details' });
   }
+
+  // Tenant pays a bill (uploads receipt, sets status to Pending)
+router.patch('/bills_rent/:billId/pay', authenticateToken, async (req, res) => {
+  const { billId } = req.params;
+  const { receipt } = req.body;
+  try {
+    // Only tenant can pay their own bill
+    const bill = await knex('bills_rent').where({ id: billId, tenantid: req.user.id }).first();
+    if (!bill) return res.status(404).json({ message: 'Bill not found' });
+
+    await knex('bills_rent').where({ id: billId }).update({
+      status: 'Pending',
+      receipt,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Error uploading payment' });
+  }
 });
+
+// Owner verifies or rejects payment
+router.patch('/bills_rent/:billId/verify', authenticateToken, async (req, res) => {
+  const { billId } = req.params;
+  const { action } = req.body; // 'Verified' or 'Rejected'
+  try {
+    // Only owner can verify bills for their property
+    const bill = await knex('bills_rent')
+      .join('properties', 'bills_rent.propertyid', 'properties.id')
+      .where({ 'bills_rent.id': billId, 'properties.ownerId': req.user.id })
+      .select('bills_rent.*')
+      .first();
+    if (!bill) return res.status(404).json({ message: 'Bill not found or unauthorized' });
+
+    if (!['Verified', 'Rejected'].includes(action)) {
+      return res.status(400).json({ message: 'Invalid action' });
+    }
+
+    await knex('bills_rent').where({ id: billId }).update({ status: action });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Error verifying payment' });
+  }
+});
+
+router.get('/bills_rent', authenticateToken, async (req, res) => {
+  const { status } = req.query;
+  try {
+    const bills = await knex('bills_rent')
+      .join('properties', 'bills_rent.propertyid', 'properties.id')
+      .join('users', 'bills_rent.tenantid', 'users.id')
+      .where({ 'properties.ownerId': req.user.id })
+      .modify(qb => {
+        if (status) qb.andWhere('bills_rent.status', status);
+      })
+      .select(
+        'bills_rent.*',
+        'users.email as tenant_email'
+      );
+    // Add category field (for now, always 'Rent')
+    const billsWithCategory = bills.map(bill => ({
+      ...bill,
+      category: 'Rent'
+    }));
+    res.json(billsWithCategory);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching bills' });
+  }
+});
+});
+
 
 module.exports = router;

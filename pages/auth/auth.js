@@ -1,129 +1,118 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
+const path = require('path');
+const fs = require('fs');
 const { knex } = require('../../database');
 
 const router = express.Router();
-const JWT_SECRET = 'your-secret-key-change-this';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this'; // Use env variable for consistency
 
-// Helper: Ensure one bill per tenant per month from move_in to current month
-async function generateBillsForCurrentMonth() {
-  const today = new Date();
-  const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth() + 1;
+// 7. Signup
+router.post('/signup', async (req, res) => {
+  const {
+    email,
+    password,
+    firstName,
+    lastName,
+    phone,
+    role, // 'tenant' or 'owner'
+  } = req.body;
 
-  // Get all tenants
-  const roomTenants = await knex('room_tenants');
-  for (const rt of roomTenants) {
-    const moveInDate = new Date(rt.move_in);
-    let year = moveInDate.getFullYear();
-    let month = moveInDate.getMonth() + 1;
-
-    // Get room and property info
-    const room = await knex('rooms').where({ id: rt.roomId }).first();
-    if (!room) continue;
-    const propertyid = room.propertyId;
-    const ownerRow = await knex('properties').where({ id: propertyid }).first();
-    const ownerid = ownerRow ? ownerRow.ownerId : null;
-
-    // Loop from move_in to current month (inclusive)
-    while (year < currentYear || (year === currentYear && month <= currentMonth)) {
-      // Only create record if move_in is before or equal to this month/year
-      const billMonthDate = new Date(year, month - 1, 1);
-      if (moveInDate > billMonthDate) {
-        // Advance to next month
-        if (month === 12) {
-          month = 1;
-          year += 1;
-        } else {
-          month += 1;
-        }
-        continue;
-      }
-
-      // Check if bill already exists for this tenant/month/year
-      const exists = await knex('bills_rent')
-        .where({
-          tenantid: rt.tenantId,
-          roomid: rt.roomId,
-          month,
-          year,
-        })
-        .first();
-
-      if (!exists) {
-        // Calculate due_date for this month/year
-        const lastDayOfMonth = new Date(year, month, 0).getDate();
-        let day = rt.paymentfrequency;
-        if (!day || day < 1) day = 1;
-        if (day > lastDayOfMonth) day = lastDayOfMonth;
-        const due_date = new Date(year, month - 1, day);
-
-        await knex('bills_rent').insert({
-          ownerid,
-          tenantid: rt.tenantId,
-          roomid: rt.roomId,
-          propertyid,
-          paymentfrequency: rt.paymentfrequency,
-          move_in: rt.move_in,
-          month,
-          year,
-          due_date,
-        });
-      }
-
-      // Advance to next month
-      if (month === 12) {
-        month = 1;
-        year += 1;
-      } else {
-        month += 1;
-      }
-    }
+  if (!email || !password || !firstName || !lastName || !phone || !role) {
+    return res.status(400).json({ message: 'Please fill all required fields.' });
   }
-}
 
-// Login route
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
   try {
-    // Find user by email
-    const user = await knex('users').where({ email }).first();
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+    // Check if user already exists
+    const existingUser = await knex('users').where({ email }).first();
+    if (existingUser) {
+      return res.status(409).json({ message: 'User already exists with this email.' });
     }
 
-    // Check password
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) {
-      return res.status(401).json({ message: 'Invalid email or password' });
-    }
+    // Hash the password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Generate JWT
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    // Generate bills for all months from move_in to today
-    await generateBillsForCurrentMonth();
-
-    // Respond with user info and token
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        firstName: user.firstName,
-        lastName: user.lastName,
-      },
+    // Create new user (remove isVerified if not in schema)
+    await knex('users').insert({
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      phone,
+      role
     });
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ message: 'Server error' });
+
+    res.status(201).json({ message: 'User registered successfully!' });
+
+  } catch (error) {
+    console.error(error);
+    // Handle duplicate email error from DB (just in case)
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ message: 'User already exists with this email.' });
+    }
+    res.status(500).json({ message: 'Server error during registration.' });
   }
+});
+
+// 8. Login
+router.post('/login', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Please enter email and password.' });
+    }
+
+    try {
+        // Find user
+        const user = await knex('users').where({ email }).first();
+        if (!user) {
+            return res.status(400).json({ message: 'Invalid login credentials.' });
+        }
+
+        // Check password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Invalid login credentials.' });
+        }
+        
+        // Check if verified (defaulted to true for prototype)
+        if (!user.isVerified) {
+            return res.status(401).json({ message: 'Please verify your account (check OTP).' });
+        }
+
+        // Create uploads/tenant{id} folder if user is a tenant
+        if (user.role === 'tenant') {
+            const folderPath = path.join(__dirname, '..', '..', 'uploads', `tenant${user.id}`);
+            if (!fs.existsSync(folderPath)) {
+                fs.mkdirSync(folderPath, { recursive: true });
+                console.log(`Created folder: ${folderPath}`);
+            }
+        }
+
+        // Create JWT Token
+        const token = jwt.sign(
+            { id: user.id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        res.status(200).json({
+            message: 'Login successful!',
+            token,
+            user: {
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                role: user.role
+            }
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error during login.' });
+    }
 });
 
 module.exports = router;
