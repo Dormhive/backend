@@ -10,7 +10,9 @@ const dashboardRoutes = require('./pages/dashboard/dashboard');
 const propertiesRoutes = require('./pages/properties/properties');
 const billsRouter = require('./pages/routes/bills');
 const billsOwnerRouter = require('./pages/routes/billsOwner');
-const tenantprofileRouter = require('./pages/routes/tenantprofile');
+const concernsRouter = require('./pages/routes/concerns');
+const concernsOwnerRouter = require('./pages/routes/concernsOwner');
+//const tenantprofileRouter = require('./pages/routes/tenantprofile');
 
 const app = express();
 app.use(cors());
@@ -23,8 +25,11 @@ app.use('/api/properties', propertiesRoutes);
 app.use('/api/bills', billsRouter);
 app.use('/api/bills/owner', billsOwnerRouter);
 app.use('/api/profiles', tenantprofileRouter);
+app.use('/api/concerns', concernsRouter);
+app.use('/api/concerns/owner', concernsOwnerRouter);
 
 // Static files
+app.use('/Backend/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(express.static(path.join(__dirname, '../frontend/build')));
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/build/index.html'));

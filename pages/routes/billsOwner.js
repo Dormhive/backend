@@ -30,7 +30,7 @@ function jwtOwnerIdMiddleware(req, res, next) {
   next();
 }
 
-// GET /api/bills/owner - bills_rent rows for this owner, with monthlyRent and tenant name
+// GET /api/bills/owner - bills_rent rows for this owner, with property name, room number, monthlyRent and tenant name
 router.get('/', jwtOwnerIdMiddleware, async (req, res) => {
   try {
     if (!req.ownerId) {
@@ -38,10 +38,13 @@ router.get('/', jwtOwnerIdMiddleware, async (req, res) => {
     }
     const bills = await knex('bills_rent')
       .join('rooms', 'bills_rent.roomid', 'rooms.id')
+      .join('properties', 'bills_rent.propertyid', 'properties.id')
       .join('users', 'bills_rent.tenantid', 'users.id')
       .select(
         'bills_rent.*',
         'rooms.monthlyRent',
+        'rooms.roomnumber',
+        'properties.propertyname',
         knex.raw("CONCAT(users.firstName, ' ', users.lastName) as tenant_name")
       )
       .where('bills_rent.ownerid', req.ownerId)
@@ -50,6 +53,58 @@ router.get('/', jwtOwnerIdMiddleware, async (req, res) => {
   } catch (err) {
     console.error('GET /api/bills/owner error:', err);
     return res.status(500).json({ message: 'Failed to fetch owner bills' });
+  }
+});
+
+// ...rest of your code (unchanged)...
+router.post('/verify/:id', jwtOwnerIdMiddleware, async (req, res) => {
+  try {
+    const billId = req.params.id;
+    const updated = await knex('bills_rent')
+      .where({ id: billId, ownerid: req.ownerId })
+      .update({ status: 'Paid', Action: 'Verify' });
+    if (updated) {
+      return res.json({ success: true });
+    } else {
+      return res.status(404).json({ message: 'Bill not found or not authorized' });
+    }
+  } catch (err) {
+    console.error('POST /api/bills/verify/:id error:', err);
+    return res.status(500).json({ message: 'Failed to verify bill' });
+  }
+});
+
+router.post('/sendback/:id', jwtOwnerIdMiddleware, async (req, res) => {
+  try {
+    const billId = req.params.id;
+    const updated = await knex('bills_rent')
+      .where({ id: billId, ownerid: req.ownerId })
+      .update({ status: 'Unpaid', receipt: null, Action: 'Send Back' });
+    if (updated) {
+      return res.json({ success: true });
+    } else {
+      return res.status(404).json({ message: 'Bill not found or not authorized' });
+    }
+  } catch (err) {
+    console.error('POST /api/bills/sendback/:id error:', err);
+    return res.status(500).json({ message: 'Failed to send back bill' });
+  }
+});
+
+router.post('/remind/:id', jwtOwnerIdMiddleware, async (req, res) => {
+  try {
+    const billId = req.params.id;
+    const updated = await knex('bills_rent')
+      .where({ id: billId, ownerid: req.ownerId })
+      .update({ Action: 'Remind' });
+    if (updated) {
+      return res.json({ success: true });
+    } else {
+      return res.status(404).json({ message: 'Bill not found or not authorized' });
+    }
+  } catch (err) {
+    console.error('POST /api/bills/remind/:id error:', err);
+    return res.status(500).json({ message: 'Failed to remind bill' });
   }
 });
 

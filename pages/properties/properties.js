@@ -330,11 +330,25 @@ router.post('/:propertyId/rooms/:roomId/assign-tenant', authenticateToken, async
   const { propertyId, roomId } = req.params;
   const { tenantEmail, move_in, paymentfrequency } = req.body;
 
-  if (!tenantEmail || !move_in || !paymentfrequency) {
-    return res.status(400).json({ message: 'Tenant email, move-in date, and payment frequency are required' });
+  // Require email and move_in; derive paymentfrequency from move_in day if not provided
+  if (!tenantEmail || !move_in) {
+    return res.status(400).json({ message: 'Tenant email and move-in date are required' });
   }
 
   try {
+    // derive paymentfrequency (day of month) when missing or invalid
+    let pf = paymentfrequency;
+    if (!pf) {
+      const d = new Date(move_in);
+      if (isNaN(d.getTime())) {
+        return res.status(400).json({ message: 'Invalid move_in date' });
+      }
+      pf = d.getDate(); // day part (1-31)
+    } else {
+      // ensure numeric
+      pf = parseInt(pf, 10) || 1;
+    }
+
     // verify room belongs to owner
     const room = await knex('rooms')
       .join('properties', 'rooms.propertyId', 'properties.id')
@@ -359,13 +373,13 @@ router.post('/:propertyId/rooms/:roomId/assign-tenant', authenticateToken, async
       return res.status(400).json({ message: 'Tenant is already assigned to a room.' });
     }
 
-    // assign tenant to room
+    // assign tenant to room (store derived paymentfrequency)
     await knex('room_tenants').insert({
       roomId,
       tenantId: tenant.id,
       paymentSchedule: room.paymentSchedule || '1st',
       move_in,
-      paymentfrequency,
+      paymentfrequency: pf,
     });
 
     // Generate bills for all months from move_in to today
