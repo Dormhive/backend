@@ -76,6 +76,8 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
     let receiptPath = null;
     if (req.file) {
       receiptPath = path.relative(path.join(__dirname, '..', '..', 'uploads'), req.file.path);
+    // Normalize to use forward slashes for frontend compatibility
+      receiptPath = receiptPath.split(path.sep).join('/');
     }
 
     // Insert into bills (now includes year and month)
@@ -100,6 +102,7 @@ router.post('/', jwtTenantIdMiddleware, upload.single('receipt'), async (req, re
         .update({
           status: 'Pending',
           receipt: receiptPath,
+          Action: null // <-- Reset Action when tenant submits new payment
         });
     }
 

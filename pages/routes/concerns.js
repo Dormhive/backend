@@ -18,7 +18,9 @@ function getUserFromToken(req) {
 router.post('/', async (req, res) => {
   try {
     const user = getUserFromToken(req);
-    if (!user || user.role !== 'tenant') return res.status(401).json({ message: 'Unauthorized' });
+    if (!user || user.role !== 'tenant') {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
 
     const { tenantid, ownerid, propertyid, roomid, category, message } = req.body;
 
@@ -36,7 +38,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'All fields are required.' });
     }
 
-    await knex('concerns').insert({
+    // Insert concern record
+    const concernIds = await knex('concerns').insert({
       tenantid,
       ownerid,
       sender: 'Tenant',
@@ -48,7 +51,21 @@ router.post('/', async (req, res) => {
       status: 'Open'
     });
 
-    res.json({ message: 'Ticket submitted successfully.' });
+    const concernId = concernIds[0];
+
+    // Insert initial message in concern_messages table
+    await knex('concern_messages').insert({
+      concernid: concernId,
+      sender: 'tenant',
+      message: message,
+      status: 'sent',
+      created_at: new Date()
+    });
+
+    res.json({ 
+      message: 'Ticket submitted successfully.',
+      concernId: concernId
+    });
   } catch (err) {
     console.error('POST /api/concerns error:', err);
     res.status(500).json({ message: `Failed to submit ticket: ${err.message}` });
@@ -59,7 +76,9 @@ router.post('/', async (req, res) => {
 router.get('/history', async (req, res) => {
   try {
     const user = getUserFromToken(req);
-    if (!user || user.role !== 'tenant') return res.status(401).json({ message: 'Unauthorized' });
+    if (!user || user.role !== 'tenant') {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
 
     let query = knex('concerns').where({ tenantid: user.id });
 
