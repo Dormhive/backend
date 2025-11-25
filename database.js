@@ -53,8 +53,8 @@ async function setupDatabase() {
         t.string('lastName');
         t.string('phone');
         t.string('address');
-        t.string('emergency_contact');
-        t.string('profile_picture');
+        t.string('emergencyContact');
+        t.string('profilePicture');
         t.enu('role', ['owner', 'tenant']).notNullable().defaultTo('tenant');
         t.timestamp('created_at').defaultTo(db.fn.now());
       });
@@ -101,7 +101,7 @@ async function setupDatabase() {
       t.integer('month').notNullable();
       t.date('due_date').notNullable();
       t.string('status').notNullable().defaultTo('Unpaid');
-      t.string('receipt'); // <-- Add this line
+      t.string('receipt'); 
       t.string('Action'); 
       t.timestamp('created_at').defaultTo(db.fn.now());
       t.foreign('ownerid').references('id').inTable('users').onDelete('CASCADE');
