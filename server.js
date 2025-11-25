@@ -22,7 +22,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/properties', propertiesRoutes);
 app.use('/api/bills', billsRouter);
 app.use('/api/bills/owner', billsOwnerRouter);
-app.use('/api/tenants', tenantprofileRouter);
+app.use('/api/profiles', tenantprofileRouter);
 
 // Static files
 app.use(express.static(path.join(__dirname, '../frontend/build')));
