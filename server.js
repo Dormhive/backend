@@ -10,6 +10,7 @@ const dashboardRoutes = require('./pages/dashboard/dashboard');
 const propertiesRoutes = require('./pages/properties/properties');
 const billsRouter = require('./pages/routes/bills');
 const billsOwnerRouter = require('./pages/routes/billsOwner');
+const tenantprofileRouter = require('./pages/routes/tenantprofile');
 
 const app = express();
 app.use(cors());
@@ -21,6 +22,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/properties', propertiesRoutes);
 app.use('/api/bills', billsRouter);
 app.use('/api/bills/owner', billsOwnerRouter);
+app.use('/api/tenants', tenantprofileRouter);
 
 // Static files
 app.use(express.static(path.join(__dirname, '../frontend/build')));

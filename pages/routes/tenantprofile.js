@@ -1,122 +1,91 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const { knex } = require('../../database');
-
 const router = express.Router();
 
-// Extract user id from JWT payload
+/**
+ * Helper to extract a user id from common token claim names
+ */
 function extractUserId(payload) {
-  return payload?.id || payload?.userId || payload?.user_id || payload?.sub || null;
+  return (
+    payload?.id ||
+    payload?.userId ||
+    payload?.user_id ||
+    payload?.sub ||
+    null
+  );
 }
 
-// Tenant JWT middleware -> sets req.tenantId
-function jwtTenantIdMiddleware(req, res, next) {
+/**
+ * Inline JWT middleware
+ * - Parses Authorization header "Bearer <token>"
+ * - Verifies token and attaches { user, userId, jwtToken } on req
+ * - Does NOT auto-401: route handlers enforce auth/role as needed
+ */
+function jwtMiddleware(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) {
-    req.tenantId = null;
-    return next();
-  }
+
+  req.user = null;
+  req.userId = null;
+  req.jwtToken = token || null;
+
+  if (!token) return next();
+
   try {
-    const secret = process.env.JWT_SECRET || 'dev-secret';
-    const payload = jwt.verify(token, secret);
-    req.tenantId = extractUserId(payload);
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-this');
+    req.user = payload;
+    req.userId = extractUserId(payload);
   } catch (err) {
-    req.tenantId = null;
+    req.user = null;
+    req.userId = null;
   }
+
   next();
 }
 
-// Multer storage for profile images
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const id = req.tenantId || 'unknown';
-    const uploadDir = path.join(__dirname, '..', '..', 'uploads', `tenant${id}`, 'profile');
-    fs.mkdirSync(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    cb(null, `${Date.now()}${ext}`);
-  },
-});
-const upload = multer({ storage, limits: { fileSize: 4 * 1024 * 1024 } }); // 4MB
-
-// GET /api/tenants/profile -> returns tenant profile from users table
-router.get('/profile', jwtTenantIdMiddleware, async (req, res) => {
-  if (!req.tenantId) return res.status(401).json({ message: 'Unauthorized' });
-
+// GET /api/tenants/me/profile  (mounted at /api/tenants -> final path /api/tenants/me/profile)
+// Validate token and fetch user row from DB using knex (returns only safe fields)
+router.get('/me/profile', jwtMiddleware, async (req, res) => {
   try {
-    const user = await knex('users').where({ id: req.tenantId }).first();
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    console.log('GET /tenants/me/profile - incoming Authorization header:', req.headers.authorization);
+    console.log('GET /tenants/me/profile - jwtMiddleware attached:', { user: req.user, userId: req.userId, token: req.jwtToken });
 
-    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+    const userPayload = req.user;
+    if (!userPayload || userPayload.role !== 'tenant') {
+      console.log('GET /tenants/me/profile - unauthorized (missing payload or role)');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-    return res.json({
-      id: user.id,
-      fullName: fullName || '',
-      email: user.email || '',
-      phone: user.phone || '',
-      address: user.address || '',
-      emergencyContact: user.emergency_contact || '',
-      profile_picture: user.profile_picture || null,
-    });
+    const userId = req.userId;
+    console.log('GET /tenants/me/profile - resolved userId:', userId, 'typeof:', typeof userId);
+    if (!userId) {
+      console.log('GET /tenants/me/profile - user id missing in token payload');
+      return res.status(401).json({ error: 'Unauthorized: user id missing' });
+    }
+
+    // Select a minimal, safe set of camelCase columns matching your DB schema
+    const fields = [
+      'id',
+      'firstName',
+      'lastName',
+      'email',
+      'phone'
+    ];
+
+    console.log('GET /tenants/me/profile - knex query fields:', fields, 'where id =', userId);
+    const user = await knex('users').select(fields).where({ id: userId }).first();
+    console.log('GET /tenants/me/profile - DB returned user:', user);
+
+    if (!user) {
+      console.log('GET /tenants/me/profile - user not found for id:', userId);
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json({ user });
   } catch (err) {
-    console.error('[tenantProfile] GET error', err);
-    return res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// PUT /api/tenants/profile -> update fields and optional file upload
-router.put('/profile', jwtTenantIdMiddleware, upload.single('profile_picture'), async (req, res) => {
-  if (!req.tenantId) return res.status(401).json({ message: 'Unauthorized' });
-
-  try {
-    const body = req.body || {};
-    const update = {};
-
-    if (body.fullName) {
-      const parts = String(body.fullName).trim().split(/\s+/);
-      update.firstName = parts.shift() || null;
-      update.lastName = parts.length ? parts.join(' ') : null;
-    }
-    if (body.email) update.email = body.email;
-    if (body.phone) update.phone = body.phone;
-    if (body.address) update.address = body.address;
-    if (body.emergencyContact) update.emergency_contact = body.emergencyContact;
-
-    if (req.file) {
-      const rel = path.relative(path.join(__dirname, '..', '..', 'uploads'), req.file.path).replace(/\\/g, '/');
-      update.profile_picture = rel;
-    }
-
-    if (Object.keys(update).length === 0) {
-      return res.status(400).json({ message: 'No fields to update' });
-    }
-
-    await knex('users').where({ id: req.tenantId }).update(update);
-
-    const updated = await knex('users').where({ id: req.tenantId }).first();
-    const fullName = [updated.firstName, updated.lastName].filter(Boolean).join(' ').trim();
-
-    return res.json({
-      message: 'Profile updated',
-      profile: {
-        id: updated.id,
-        fullName,
-        email: updated.email,
-        phone: updated.phone,
-        address: updated.address,
-        emergencyContact: updated.emergency_contact,
-        profile_picture: updated.profile_picture || null,
-      }
-    });
-  } catch (err) {
-    console.error('[tenantProfile] PUT error', err);
-    return res.status(500).json({ message: 'Server error' });
+    console.error('GET /tenants/me/profile error:', err);
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
